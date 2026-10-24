@@ -1,3 +1,11 @@
+<!-- fanxing-style:start -->
+<picture><source media="(prefers-color-scheme: light)" srcset="https://fanxing724.github.io/new-make/fanxing724/projects/starbridge/cover.light.svg"><img alt="StarBridge · 公开下载桥" src="https://fanxing724.github.io/new-make/fanxing724/projects/starbridge/cover.svg" width="100%"></picture>
+
+**把公开资源接到一座更清楚的桥上。**
+
+番星 / 星轨手记 · 项目 README 入口
+<!-- fanxing-style:end -->
+
 # 星桥 StarBridge
 
 公开下载入口：无需账号，转发 GitHub Release、软件/驱动 HTTPS 直链，以及 Docker Hub 公共镜像。Python 3.11+ 标准库实现，无第三方运行时依赖。
