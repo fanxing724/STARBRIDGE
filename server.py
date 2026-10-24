@@ -19,11 +19,12 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import quote, unquote, urlencode, urljoin, urlsplit
+from limits import Limits, Limited, Reservation
 
 ROOT = Path(__file__).resolve().parent
 TLS = ssl.create_default_context()
 LOG = logging.getLogger('starbridge')
-VERSION = '0.1.0'
+VERSION = '0.2.0'
 
 
 class Rejected(Exception):
@@ -139,6 +140,20 @@ class App:
         self.lock = threading.Lock()
         self.tokens = {}
         self.failures = collections.OrderedDict()
+        self.public = config.get('public', False)
+        self.limits = Limits(config, self.secret) if self.public else None
+
+    def client_ip(self, peer, headers):
+        expected = self.config.get('proxy_secret', '')
+        supplied = headers.get('X-StarBridge-Origin-Key', '')
+        if len(expected) >= 32 and hmac.compare_digest(supplied.encode(), expected.encode()):
+            value = headers.get('EO-Connecting-IP', '')
+            try:
+                return str(ipaddress.ip_address(value))
+            except ValueError:
+                raise Rejected('Invalid trusted client IP header') from None
+        # Forwarded headers alone are untrusted, including on direct origin requests.
+        return str(ipaddress.ip_address(peer))
 
     def signature(self, expiry, target):
         return hmac.new(self.secret, f'{expiry}/{target}'.encode(), hashlib.sha256).hexdigest()
@@ -292,11 +307,17 @@ class Handler(BaseHTTPRequestHandler):
                 return self.reply(414, {'error': 'URL too long'})
             if self.path == '/healthz' and self.command in ('GET', 'HEAD'):
                 return self.reply(200, {'ok': True, 'version': VERSION})
+            self.ip = self.app.client_ip(self.client_address[0], self.headers)
+            if self.app.public:
+                self.app.limits.request(self.ip)
             if self.path.startswith('/d/') and self.command in ('GET', 'HEAD'):
                 url, ttl = self.app.verify(urlsplit(self.path).path)
                 return self.transfer(url, ttl=ttl)
-            if not self.authorized():
+            if not self.app.public and not self.authorized():
                 return
+            if self.path == '/api/limits' and self.command in ('GET', 'HEAD'):
+                data = self.app.limits.snapshot(self.ip) if self.app.public else {}
+                return self.reply(200, dict(data, public=self.app.public))
             if self.path == '/' and self.command in ('GET', 'HEAD'):
                 return self.reply(200, (ROOT / 'index.html').read_bytes(), 'text/html; charset=utf-8', {
                     'Content-Security-Policy': "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'"})
@@ -314,6 +335,8 @@ class Handler(BaseHTTPRequestHandler):
             if self.command in ('GET', 'HEAD') and self.path.startswith('/v2/'):
                 return self.docker()
             return self.reply(404, {'error': 'Not found'})
+        except Limited as exc:
+            self.reply(429, {'error': str(exc)}, extra={'Retry-After': '60'})
         except Rejected as exc:
             self.reply(400, {'error': str(exc)})
         except (ValueError, KeyError, TypeError):
@@ -347,7 +370,12 @@ class Handler(BaseHTTPRequestHandler):
             return self.reply(503, {'error': 'All download slots busy'}, extra={'Retry-After': '5'})
         conn = res = None
         started = False
+        reservation = None
+        ip_slot = False
         try:
+            if self.app.public:
+                self.app.limits.acquire(self.ip)
+                ip_slot = True
             headers = {}
             for name in ('Range', 'If-Range', 'If-None-Match', 'If-Modified-Since', 'Accept'):
                 if name in self.headers:
@@ -369,6 +397,8 @@ class Handler(BaseHTTPRequestHandler):
             if res.status in (404, 429):
                 return self.reply(res.status, {'error': 'Upstream not found or rate limited'},
                                   extra={'Retry-After': '60'} if res.status == 429 else None)
+            if self.app.public and self.command != 'HEAD' and res.status in (200, 206):
+                reservation = Reservation(self.app.limits, self.ip, int(size) if size is not None else None)
             self.send_response(res.status)
             started = True
             forwarded = ('Content-Type', 'Content-Length', 'Content-Range', 'Accept-Ranges',
@@ -384,7 +414,7 @@ class Handler(BaseHTTPRequestHandler):
             if not docker:
                 self.send_header('Content-Disposition', "attachment; filename*=UTF-8''" +
                                  quote(unquote(urlsplit(url).path.rsplit('/', 1)[-1]) or 'download', safe=''))
-            self.send_header('Cache-Control', f'public, max-age={ttl}, no-transform' if ttl and res.status in (200, 206, 304)
+            self.send_header('Cache-Control', f'public, max-age={ttl}, no-transform' if not self.app.public and ttl and res.status in (200, 206, 304)
                              else 'private, no-store')
             self.end_headers()
             if self.command == 'HEAD' or res.status == 304:
@@ -398,6 +428,9 @@ class Handler(BaseHTTPRequestHandler):
                 total += len(chunk)
                 if total > limit or time.monotonic() > deadline:
                     break
+                if reservation:
+                    reservation.consume(len(chunk))
+                    self.app.limits.pace(self.ip, len(chunk))
                 self.wfile.write(chunk)
         except Exception:
             if started:
@@ -406,6 +439,13 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 raise
         finally:
+            if reservation:
+                try:
+                    reservation.close()
+                except Exception:
+                    LOG.error('Quota refund unavailable; reserved bytes retained')
+            if ip_slot:
+                self.app.limits.release(self.ip)
             if res:
                 res.close()
             if conn:
@@ -418,6 +458,10 @@ def main():
     parser.add_argument('--config', required=True)
     args = parser.parse_args()
     config = json.loads(Path(args.config).read_text())
+    if config.get('public') is True and (not config.get('allowed_domains') or not config.get('quota_db')):
+        raise SystemExit('Public mode requires allowed_domains and a persistent quota_db')
+    if type(config.get('public', False)) is not bool:
+        raise SystemExit('public must be a JSON boolean')
     if len(config.get('secret', '')) < 32 or len(config.get('password', '')) < 24:
         raise SystemExit('Configure independent random password and secret (24/32+ characters)')
     logging.basicConfig(level=logging.INFO)

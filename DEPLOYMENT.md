@@ -18,10 +18,10 @@
 1. 在 `xingbox.me` 站点中新增加速域名 `download.xingbox.me`。源站为 `ORIGIN_IP`，HTTPS，端口 `8443`，回源 Host/SNI 为 `download.xingbox.me`。
 2. 独立 TLS 源站可由专属自建 CA 签发，证书需包含域名与 IP SAN。CA 公钥在本机任务目录 `origin-ca.crt`，私钥仅保留服务器 `/root/maintenance/starbridge-ca/`。在套餐支持时上传 CA 公钥启用指定 CA 校验；不上传源站私钥给客户端。公网边缘证书使用 EdgeOne 托管证书。源站证书有效期一年，需要在到期前更新。
 3. 根据控制台实际给出的 CNAME 添加 `download` 记录。**不可预先编造 CNAME**；不要修改站点其他 DNS 记录。
-4. 默认所有路径遵循源站 `Cache-Control`，页面、API、Docker、错误响应不缓存；不要设置“全部强制缓存”。
-5. `/d/*` 可缓存，完整路径必须纳入缓存键，不能忽略过期时间/签名/目标编码。遵循源站 TTL，不强制覆盖。GET/HEAD 可缓存，POST 不缓存。
-6. 在确认源站 Range 测试通过后为大文件启用 Range GETs/分片回源。关闭内容压缩转换，保持二进制内容和响应头；不要通过修改后缀或切块规避套餐文件大小限制。
-7. Docker 路径保持 Authorization 透传、不启用 JS 挑战、交互验证码或缓存。只对下载路径调整必要规则，保留其他站点规则。
+4. 公开限额模式：所有路径禁用缓存/遵循 `no-store`，包括 `/d/*`。清理旧版 `/d/*` 缓存，不能沿用“下载文件强制缓存”规则。
+5. 在回源请求头规则中**设置/覆盖** `X-StarBridge-Origin-Key`，值为服务器配置中的 `proxy_secret`。保留平台默认的 `EO-Connecting-IP`。服务器只有验证密钥后才采信这个 IP；否则按 TCP 对端计数，CDN 节点后的用户会共享额度。密钥仅通过本机受保护文件交接，不写进公开文档。
+6. 透传 Range/If-Range，不启用分片回源、预取或多段合并，以免 CDN 放大源站请求或干扰限额；关闭压缩转换，保持二进制内容与 Content-Length/Content-Range 一致。
+7. Docker 路径不启用 JS 挑战、交互验证码或缓存；公开模式无需登录。仅修改本加速域名的规则，保留其他站点规则。
 8. 本版本签名链接是临时下载授权；如需边缘即时鉴权/私有内容控制，再独立设计缓存前鉴权，不通过忽略 Authorization 来提升命中。
 
 官方说明：[分片回源](https://edgeone.ai/zh/document/46966)、[源站证书校验](https://edgeone.ai/document/74344)。是否有中国大陆节点、流量额度、文件大小上限及适用内容，应以账户当前套餐为准。
@@ -29,15 +29,17 @@
 ## 接入后的验收
 
 - DNS 解析到控制台下发 CNAME，HTTPS 证书受信任。
-- `/` 和 `/v2/` 未登录为 401；正确密码能打开页面/登录。
+- 公开模式 `/`、`/v2/` 和 `/api/limits` 无登录返回 200，页面显示限额。私用模式保留 Basic 认证。
 - 下载 GitHub Release，和原文件比较 SHA256；Range 返回 206，Content-Range 与字节正确。
-- 同一签名链接重复请求，查看平台实际缓存状态头/控制台命中数据；不能仅凭下载成功认定缓存命中。
-- `docker login` 后执行 `docker pull download.xingbox.me/library/hello-world:latest`，确认真实 Docker 客户端兼容性。
-- 对国内客户端测原链接、首次代理、缓存命中三组速度，记录时间、文件大小与 CDN 头。服务器访问成功不代表国内加速成功。
+- 同一下载重复请求仍需回源，确认 `Cache-Control` 为 no-store、无 Age 增长/缓存 HIT；清理旧缓存后再次确认。
+- 无登录执行 `docker pull download.xingbox.me/library/hello-world:latest`，确认真实客户端兼容性；必要时将客户端镜像层下载并发调低。
+- 测原链接与代理下载速度，并验证同一 IP 两个下载合计不超过 2 MiB/s、第三个被限流；确认 CDN 回源头密钥验证后使用正确客户端 IP。源站成功不代表国内提速。
 
 ## 更新与回退
 
 先将 `/opt/starbridge`、unit 和配置备份到 `/root/maintenance/starbridge-时间/`，配置备份权限 600。新代码先跑测试，再替换代码并执行 `systemctl restart starbridge`。配置不要被 `create_config.py` 覆盖：该脚本使用独占创建，已有文件会拒绝。
+
+配额状态保存在 `/var/lib/starbridge/usage.sqlite3`，unit 的 `StateDirectory=starbridge` 创建持久化目录。公开配置必须指定可写 `quota_db`，不要将 SQLite 放在 ProtectSystem=strict 保护的 `/etc` 下。正常重启不清零日额度；备份数据时使用 SQLite backup API，避免只复制运行中的主文件而漏掉 WAL。
 
 查看健康与资源：
 

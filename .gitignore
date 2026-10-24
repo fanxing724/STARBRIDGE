@@ -11,3 +11,6 @@ config.*.json
 *.pem
 *.p12
 *.pfx
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm

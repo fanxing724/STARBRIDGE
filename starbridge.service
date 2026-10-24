@@ -1,5 +1,5 @@
 [Unit]
-Description=StarBridge authenticated download relay
+Description=StarBridge download relay with persistent traffic limits
 After=network-online.target
 Wants=network-online.target
 
@@ -7,6 +7,8 @@ Wants=network-online.target
 Type=simple
 User=starbridge
 Group=starbridge
+StateDirectory=starbridge
+StateDirectoryMode=0700
 WorkingDirectory=/opt/starbridge
 ExecStart=/usr/bin/python3 /opt/starbridge/server.py --config /etc/starbridge/config.json
 Restart=on-failure
