@@ -1,5 +1,5 @@
 <!-- fanxing-style:start -->
-<picture><source media="(prefers-color-scheme: light)" srcset="https://fanxing724.github.io/new-make/fanxing724/projects/starbridge/cover.light.svg"><img alt="StarBridge · 公开下载桥" src="https://fanxing724.github.io/new-make/fanxing724/projects/starbridge/cover.svg" width="100%"></picture>
+<picture><source media="(prefers-color-scheme: light)" srcset="https://fanxing724.github.io/new-make/fanxing724/projects/STARBRIDGE/cover.light.svg"><img alt="StarBridge · 公开下载桥" src="https://fanxing724.github.io/new-make/fanxing724/projects/STARBRIDGE/cover.svg" width="100%"></picture>
 
 **把公开资源接到一座更清楚的桥上。**
 
