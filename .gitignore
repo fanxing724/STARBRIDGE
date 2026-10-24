@@ -1,0 +1,13 @@
+__pycache__/
+config.json
+*.log
+.venv/
+
+# Local credentials and TLS material
+config.*.json
+.env
+.env.*
+*.key
+*.pem
+*.p12
+*.pfx

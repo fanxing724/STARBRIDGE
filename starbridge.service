@@ -1,0 +1,33 @@
+[Unit]
+Description=StarBridge authenticated download relay
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=starbridge
+Group=starbridge
+WorkingDirectory=/opt/starbridge
+ExecStart=/usr/bin/python3 /opt/starbridge/server.py --config /etc/starbridge/config.json
+Restart=on-failure
+RestartSec=5
+MemoryMax=160M
+CPUQuota=50%
+TasksMax=40
+LimitNOFILE=256
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+StandardOutput=journal
+StandardError=journal
+LogRateLimitIntervalSec=60s
+LogRateLimitBurst=30
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
