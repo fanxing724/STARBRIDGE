@@ -32,7 +32,7 @@ python3 server.py --config /absolute/path/config.json
 
 ## 管理后台
 
-访问 `/admin`，使用用户名 `bridge` 登录。首次管理密码由配置中的独立 `admin_password` 初始化，随后以随机盐 PBKDF2-SHA256 哈希保存到 SQLite；在后台修改密码后，重启也会保留新密码。后台密码与旧版私用下载 Basic 密码独立，修改管理密码不会改写只读部署配置。
+访问 `/admin`；初始用户名由 `admin_username` 指定，默认为 `bridge`，已有账号以数据库保存值为准。首次管理密码由配置中的独立 `admin_password` 初始化，随后以随机盐 PBKDF2-SHA256 哈希保存到 SQLite；在后台修改密码后，重启也会保留新密码。后台密码与旧版私用下载 Basic 密码独立，修改管理密码不会改写只读部署配置。
 
 后台提供：
 

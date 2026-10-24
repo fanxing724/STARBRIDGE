@@ -37,6 +37,7 @@ class Admin:
                 self.credentials = json.loads(row[0])
             else:
                 self.credentials = self.hash_password(app.config.get('admin_password', app.password))
+                self.credentials['username'] = app.config.get('admin_username', 'bridge')
                 limits.db.execute('INSERT INTO admin_state VALUES(?,?)', ('credentials', json.dumps(self.credentials)))
             row = limits.db.execute("SELECT value FROM admin_state WHERE name='settings'").fetchone()
             if row:
@@ -77,7 +78,7 @@ class Admin:
         # Always hash even if the username is wrong; username is not an oracle.
         expected_credentials = self.credentials
         password_ok = self.password_valid(password)
-        if not password_ok or username != 'bridge':
+        if not password_ok or username != expected_credentials.get('username', self.app.config.get('admin_username', 'bridge')):
             return None
         with self.lock:
             self.attempts.pop(ip, None)
@@ -187,6 +188,7 @@ class Admin:
         if hmac.compare_digest(old.encode(), new.encode()):
             raise ValueError('新密码不能与原密码相同')
         credentials = self.hash_password(new)
+        credentials['username'] = self.credentials.get('username', self.app.config.get('admin_username', 'bridge'))
         limits = self.app.limits
         with limits.lock, limits.db:
             limits.db.execute("UPDATE admin_state SET value=? WHERE name='credentials'", (json.dumps(credentials),))

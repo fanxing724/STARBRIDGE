@@ -4,7 +4,7 @@
 <body><main>
 <header><div><a class="brand" href="/">STARBRIDGE / 星桥</a><h1>管理后台</h1><p class="muted">掌握用量，让公开下载有序运行。</p></div><button id="logout" class="secondary" hidden>退出登录</button></header>
 <p id="message" role="status" aria-live="polite"></p>
-<section id="login-section" hidden><h2>管理员登录</h2><form id="login-form"><label>用户名<input id="username" autocomplete="username" value="bridge" required></label><label>管理密码<input id="password" type="password" autocomplete="current-password" required maxlength="256"></label><button type="submit">登录后台</button></form><p class="muted">使用部署时提供的独立管理密码。公开下载不需要此账号。</p></section>
+<section id="login-section" hidden><h2>管理员登录</h2><form id="login-form"><label>用户名<input id="username" autocomplete="username" placeholder="管理员用户名" required></label><label>管理密码<input id="password" type="password" autocomplete="current-password" required maxlength="256"></label><button type="submit">登录后台</button></form><p class="muted">使用部署时提供的独立管理账号。公开下载不需要此账号。</p></section>
 <div id="dashboard" hidden>
 <div class="toolbar"><span id="service-state" class="badge"></span><button id="refresh" class="secondary">刷新状态与设置</button></div>
 <div class="metrics"><article><span>今日计额下载量</span><strong id="total-used">—</strong><small id="budget">—</small></article><article><span>当前传输</span><strong id="active">—</strong><small>全站最多 4 个传输</small></article><article><span>今日活跃访客</span><strong id="visitors">—</strong><small>按匿名 IP 标识统计</small></article><article><span>进程内存</span><strong id="memory">—</strong><small id="uptime">—</small></article></div>

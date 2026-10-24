@@ -68,6 +68,18 @@ class AdminHTTPTests(unittest.TestCase):
         self.assertEqual(self.request('/admin/api/login', {'username': 'bridge', 'password': self.cfg['password']})[0], 401)
         self.login()
 
+    def test_custom_owner_username_survives_password_change(self):
+        self.app.admin.credentials['username'] = 'owner-test'
+        self.assertIsNone(self.app.admin.login('127.0.0.1', 'bridge', self.cfg['admin_password']))
+        self.assertIsNotNone(self.app.admin.login('127.0.0.1', 'owner-test', self.cfg['admin_password']))
+        self.app.admin.change_password(self.cfg['admin_password'], 'new-custom-owner-password')
+        restarted = s.App(self.cfg)
+        try:
+            self.assertEqual(restarted.admin.credentials['username'], 'owner-test')
+            self.assertIsNotNone(restarted.admin.login('127.0.0.1', 'owner-test', 'new-custom-owner-password'))
+        finally:
+            restarted.limits.db.close()
+
     def test_public_admin_shell_and_strict_csp(self):
         status, headers, body = self.request('/admin')
         self.assertEqual(status, 200)
