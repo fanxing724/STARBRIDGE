@@ -16,15 +16,17 @@ import socket
 import ssl
 import threading
 import time
+from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import quote, unquote, urlencode, urljoin, urlsplit
 from limits import Limits, Limited, Reservation
+from admin import Admin, Conflict
 
 ROOT = Path(__file__).resolve().parent
 TLS = ssl.create_default_context()
 LOG = logging.getLogger('starbridge')
-VERSION = '0.2.0'
+VERSION = '0.3.0'
 
 
 class Rejected(Exception):
@@ -141,7 +143,13 @@ class App:
         self.tokens = {}
         self.failures = collections.OrderedDict()
         self.public = config.get('public', False)
-        self.limits = Limits(config, self.secret) if self.public else None
+        self.paused = False
+        self.started = time.monotonic()
+        self.version = VERSION
+        self.active_transfers = 0
+        self.verified_proxy_calls = 0
+        self.limits = Limits(config, self.secret)
+        self.admin = Admin(self)
 
     def client_ip(self, peer, headers):
         expected = self.config.get('proxy_secret', '')
@@ -149,9 +157,12 @@ class App:
         if len(expected) >= 32 and hmac.compare_digest(supplied.encode(), expected.encode()):
             value = headers.get('EO-Connecting-IP', '')
             try:
-                return str(ipaddress.ip_address(value))
+                result = str(ipaddress.ip_address(value))
             except ValueError:
                 raise Rejected('Invalid trusted client IP header') from None
+            with self.lock:
+                self.verified_proxy_calls += 1
+            return result
         # Forwarded headers alone are untrusted, including on direct origin requests.
         return str(ipaddress.ip_address(peer))
 
@@ -308,20 +319,26 @@ class Handler(BaseHTTPRequestHandler):
             if self.path == '/healthz' and self.command in ('GET', 'HEAD'):
                 return self.reply(200, {'ok': True, 'version': VERSION})
             self.ip = self.app.client_ip(self.client_address[0], self.headers)
+            if urlsplit(self.path).path == '/admin' or urlsplit(self.path).path.startswith('/admin/'):
+                return self.admin_route(urlsplit(self.path).path)
             if self.app.public:
                 self.app.limits.request(self.ip)
             if self.path.startswith('/d/') and self.command in ('GET', 'HEAD'):
+                if not self.app.public and self.app.config.get('require_download_login') and not self.authorized():
+                    return
                 url, ttl = self.app.verify(urlsplit(self.path).path)
                 return self.transfer(url, ttl=ttl)
             if not self.app.public and not self.authorized():
                 return
             if self.path == '/api/limits' and self.command in ('GET', 'HEAD'):
                 data = self.app.limits.snapshot(self.ip) if self.app.public else {}
-                return self.reply(200, dict(data, public=self.app.public))
+                return self.reply(200, dict(data, public=self.app.public, paused=self.app.paused))
             if self.path == '/' and self.command in ('GET', 'HEAD'):
                 return self.reply(200, (ROOT / 'index.html').read_bytes(), 'text/html; charset=utf-8', {
                     'Content-Security-Policy': "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'"})
             if self.path == '/api/link' and self.command == 'POST':
+                if self.app.paused:
+                    return self.reply(503, {'error': '管理员已暂停新下载，请稍后再试'})
                 if self.headers.get('Sec-Fetch-Site', '') == 'cross-site':
                     return self.reply(403, {'error': 'Cross-site request rejected'})
                 if self.headers.get('Content-Type', '').split(';')[0] != 'application/json':
@@ -335,6 +352,8 @@ class Handler(BaseHTTPRequestHandler):
             if self.command in ('GET', 'HEAD') and self.path.startswith('/v2/'):
                 return self.docker()
             return self.reply(404, {'error': 'Not found'})
+        except Conflict as exc:
+            self.reply(409, {'error': str(exc)})
         except Limited as exc:
             self.reply(429, {'error': str(exc)}, extra={'Retry-After': '60'})
         except Rejected as exc:
@@ -346,6 +365,80 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as exc:
             LOG.warning('Request failed: %s', type(exc).__name__)
             self.reply(502, {'error': 'Upstream unavailable; retry later'})
+
+    def admin_cookie(self, token='', clear=False):
+        cookie = 'sb_admin=' + token + '; Path=/admin; HttpOnly; SameSite=Strict; Max-Age=' + ('0' if clear else '28800')
+        if isinstance(self.connection, ssl.SSLSocket):
+            cookie += '; Secure'
+        return {'Set-Cookie': cookie}
+
+    def admin_body(self):
+        if self.headers.get('Sec-Fetch-Site') == 'cross-site':
+            raise Rejected('Cross-site request rejected')
+        origin = self.headers.get('Origin')
+        expected = ('https' if isinstance(self.connection, ssl.SSLSocket) else 'http') + '://' + self.headers.get('Host', '')
+        if origin and origin != expected:
+            raise Rejected('Origin mismatch')
+        if self.headers.get('Content-Type', '').split(';')[0] != 'application/json':
+            raise Rejected('Expected application/json')
+        size = int(self.headers.get('Content-Length', '0'))
+        if not 0 < size <= 16384 or self.headers.get('Transfer-Encoding'):
+            raise Rejected('Invalid request body size')
+        body = json.loads(self.rfile.read(size))
+        if not isinstance(body, dict):
+            raise Rejected('Invalid request body')
+        return body
+
+    def admin_route(self, path):
+        if self.command in ('GET', 'HEAD'):
+            files = {'/admin': ('admin.html', 'text/html; charset=utf-8'),
+                     '/admin/': ('admin.html', 'text/html; charset=utf-8'),
+                     '/admin/assets/admin.js': ('admin.js', 'text/javascript; charset=utf-8'),
+                     '/admin/assets/admin.css': ('admin.css', 'text/css; charset=utf-8')}
+            if path in files:
+                name, content_type = files[path]
+                return self.reply(200, (ROOT / name).read_bytes(), content_type, {
+                    'Content-Security-Policy': "default-src 'self'; script-src 'self'; style-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"})
+        if path == '/admin/api/login' and self.command == 'POST':
+            body = self.admin_body()
+            result = self.app.admin.login(self.ip, body.get('username'), body.get('password'))
+            if not result:
+                return self.reply(401, {'error': '用户名或密码不正确'})
+            token, session = result
+            return self.reply(200, {'ok': True, 'csrf': session['csrf']}, extra=self.admin_cookie(token))
+        raw_cookie = self.headers.get('Cookie', '')
+        cookie = SimpleCookie()
+        if len(raw_cookie) <= 4096:
+            try:
+                cookie.load(raw_cookie)
+            except Exception:
+                pass
+        token = cookie['sb_admin'].value if 'sb_admin' in cookie else ''
+        session = self.app.admin.session(token)
+        if not session:
+            return self.reply(401, {'error': '请先登录管理后台'})
+        if path == '/admin/api/status' and self.command in ('GET', 'HEAD'):
+            return self.reply(200, dict(self.app.admin.status(), csrf=session['csrf']))
+        if self.command == 'POST':
+            if not hmac.compare_digest(self.headers.get('X-CSRF-Token', '').encode(), session['csrf'].encode()):
+                return self.reply(403, {'error': '操作校验失败，请刷新页面重试'})
+            body = self.admin_body()
+            if path == '/admin/api/logout':
+                self.app.admin.logout(token)
+                return self.reply(200, {'ok': True}, extra=self.admin_cookie(clear=True))
+            if path == '/admin/api/settings':
+                try:
+                    self.app.admin.save(body.get('settings'), body.get('revision'))
+                except ValueError as exc:
+                    return self.reply(400, {'error': str(exc)})
+                return self.reply(200, {'ok': True, 'revision': self.app.admin.revision})
+            if path == '/admin/api/password':
+                try:
+                    token, session = self.app.admin.change_password(body.get('old_password'), body.get('new_password'))
+                except ValueError as exc:
+                    return self.reply(400, {'error': str(exc)})
+                return self.reply(200, {'ok': True, 'csrf': session['csrf']}, extra=self.admin_cookie(token))
+        return self.reply(404, {'error': '管理接口不存在'})
 
     def docker(self):
         if self.path == '/v2/':
@@ -366,15 +459,20 @@ class Handler(BaseHTTPRequestHandler):
                              docker=True, token=token)
 
     def transfer(self, url, ttl=0, docker=False, token=None):
+        if self.app.paused:
+            return self.reply(503, {'error': '管理员已暂停新下载，请稍后再试'})
         if not self.app.transfers.acquire(blocking=False):
             return self.reply(503, {'error': 'All download slots busy'}, extra={'Retry-After': '5'})
         conn = res = None
         started = False
         reservation = None
         ip_slot = False
+        limit_state = self.app.limits if self.app.public else None
+        with self.app.lock:
+            self.app.active_transfers += 1
         try:
-            if self.app.public:
-                self.app.limits.acquire(self.ip)
+            if limit_state:
+                limit_state.acquire(self.ip)
                 ip_slot = True
             headers = {}
             for name in ('Range', 'If-Range', 'If-None-Match', 'If-Modified-Since', 'Accept'):
@@ -397,8 +495,8 @@ class Handler(BaseHTTPRequestHandler):
             if res.status in (404, 429):
                 return self.reply(res.status, {'error': 'Upstream not found or rate limited'},
                                   extra={'Retry-After': '60'} if res.status == 429 else None)
-            if self.app.public and self.command != 'HEAD' and res.status in (200, 206):
-                reservation = Reservation(self.app.limits, self.ip, int(size) if size is not None else None)
+            if limit_state and self.command != 'HEAD' and res.status in (200, 206):
+                reservation = Reservation(limit_state, self.ip, int(size) if size is not None else None)
             self.send_response(res.status)
             started = True
             forwarded = ('Content-Type', 'Content-Length', 'Content-Range', 'Accept-Ranges',
@@ -414,8 +512,8 @@ class Handler(BaseHTTPRequestHandler):
             if not docker:
                 self.send_header('Content-Disposition', "attachment; filename*=UTF-8''" +
                                  quote(unquote(urlsplit(url).path.rsplit('/', 1)[-1]) or 'download', safe=''))
-            self.send_header('Cache-Control', f'public, max-age={ttl}, no-transform' if not self.app.public and ttl and res.status in (200, 206, 304)
-                             else 'private, no-store')
+            # Owner mode switches must never revive a cached, unmetered download.
+            self.send_header('Cache-Control', 'private, no-store')
             self.end_headers()
             if self.command == 'HEAD' or res.status == 304:
                 return
@@ -430,7 +528,7 @@ class Handler(BaseHTTPRequestHandler):
                     break
                 if reservation:
                     reservation.consume(len(chunk))
-                    self.app.limits.pace(self.ip, len(chunk))
+                    limit_state.pace(self.ip, len(chunk))
                 self.wfile.write(chunk)
         except Exception:
             if started:
@@ -445,12 +543,14 @@ class Handler(BaseHTTPRequestHandler):
                 except Exception:
                     LOG.error('Quota refund unavailable; reserved bytes retained')
             if ip_slot:
-                self.app.limits.release(self.ip)
+                limit_state.release(self.ip)
             if res:
                 res.close()
             if conn:
                 conn.close()
             self.app.transfers.release()
+            with self.app.lock:
+                self.app.active_transfers -= 1
 
 
 def main():
@@ -458,6 +558,10 @@ def main():
     parser.add_argument('--config', required=True)
     args = parser.parse_args()
     config = json.loads(Path(args.config).read_text())
+    if not config.get('quota_db'):
+        raise SystemExit('A persistent quota_db is required for owner settings and credentials')
+    if len(config.get('admin_password', '')) < 24:
+        raise SystemExit('Configure an independent random admin_password (24+ characters) before upgrading')
     if config.get('public') is True and (not config.get('allowed_domains') or not config.get('quota_db')):
         raise SystemExit('Public mode requires allowed_domains and a persistent quota_db')
     if type(config.get('public', False)) is not bool:

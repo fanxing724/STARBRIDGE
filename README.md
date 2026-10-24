@@ -26,9 +26,29 @@ python3 server.py --config /absolute/path/config.json
 
 默认监听 `127.0.0.1:18080`，新配置默认 `public: true`，配额数据库创建在配置文件旁。页面可查看当前额度并生成约 6 小时有效的下载链接，支持 HEAD、单段 Range 和断点续传。链接包含 Base64 编码的源地址，并非加密，不应使用带私人凭据的链接。
 
-`create_config.py` 不覆盖已有配置，不打印密钥。配置内的 `secret`、`proxy_secret` 和旧版私用密码不得提交 Git。旧配置默认保留私用鉴权；要启用公开模式，明确设置 `public: true` 和可写的持久化 `quota_db`。需要恢复私用时设 `public: false`，原 Basic 账号 `bridge` 继续可用。
+`create_config.py` 不覆盖已有配置，不打印密钥。配置内的 `secret`、`proxy_secret`、`admin_password` 和旧版私用密码不得提交 Git。旧配置默认保留私用鉴权；要启用公开模式，明确设置 `public: true` 和可写的持久化 `quota_db`。可在后台恢复私用；原 Basic 账号 `bridge` 继续可用。若已有后台设置，数据库保存的模式优先于配置默认项。
 
 添加下载站时修改 `allowed_domains` 并重启；主域名覆盖其子域名。每一跳都校验白名单、拒绝内网地址并固定 DNS 解析后的连接 IP，校验 HTTPS 主机名，只允许 HTTPS 443。浏览器 Cookie、客户端 Authorization 不转发到下载源，跨主机跳转剥离上游认证。
+
+## 管理后台
+
+访问 `/admin`，使用用户名 `bridge` 登录。首次管理密码由配置中的独立 `admin_password` 初始化，随后以随机盐 PBKDF2-SHA256 哈希保存到 SQLite；在后台修改密码后，重启也会保留新密码。后台密码与旧版私用下载 Basic 密码独立，修改管理密码不会改写只读部署配置。
+
+后台提供：
+
+- 今日下载量、当前传输、匿名访客数、近 7 天用量和今日用量前十。
+- 服务版本、运行时长、进程当前内存、可信代理请求是否收到。
+- 每 IP 并发、合计速度、日额度、全站日额度与请求频率的在线修改。
+- 来源域名白名单、公开/私用模式切换、暂停新下载。
+- 管理密码修改、退出登录及最近管理操作记录。
+
+设置保存到配额数据库，立即应用，不重启服务、不清空现有用量，数据库设置在下次启动时覆盖对应配置文件默认项。暂停只阻止新请求，正在传输的文件继续结束；已预留的额度仍按原请求计数。切换到私用会要求旧签名链接也通过 Basic 登录；后台会话不受公开开关或公共访问限流影响。全局 4 个传输、160 MiB 和半核的服务资源限制仍固定保留。
+
+管理会话使用 HttpOnly、SameSite=Strict Cookie，HTTPS 下附带 Secure，最多有效 8 小时。写操作需要 CSRF 校验并拒绝跨站来源；并发修改旧版本设置返回 409，避免覆盖其他页面的更新。改密码会使其他会话失效，服务重启后需重新登录。后台及其资源禁止 CDN 缓存；不要对 `/admin/*` 启用公开下载缓存规则。
+
+旧版本升级前需在服务器受保护配置中生成独立的 `admin_password`（至少 24 字符），不要复用可能已共享给下载用户的私用密码。`create_config.py` 会为全新部署生成独立密码。
+
+持久化的管理数据与流量记录共用 `quota_db`，因此启动服务必须指定可写的持久化数据库路径。首次升级会增加管理数据表，不重建或删除既有用量表。
 
 ## Docker
 
@@ -56,7 +76,7 @@ EdgeOne 默认传递 `EO-Connecting-IP`。服务器只有在 `X-StarBridge-Origi
 - 全局最多 4 个传输，HTTP/TLS 共享最多 24 个连接工作线程；64 KiB 流式发送，不落盘缓存下载文件。
 - 默认单响应上限 8 GiB、2 小时，套接字空闲超时 30 秒；同时受剩余日额度约束。
 - systemd 独立用户运行，内存上限 160 MiB、CPU 上限半核，`StateDirectory=starbridge` 为配额数据库提供可写目录。部署时将 `quota_db` 配置为 `/var/lib/starbridge/usage.sqlite3`。
-- 页面、错误响应、下载和 Docker 均不缓存；健康检查不消耗请求频率限额。
+- 页面、管理后台、错误响应、下载和 Docker 均不缓存；健康检查不消耗请求频率限额。
 - 不支持 Git smart-HTTP 克隆、交互式网页、登录/验证码/浏览器 Cookie 下载；未逐一适配所有驱动站。
 
 ## 校验
@@ -66,4 +86,4 @@ python3 -m unittest -v
 python3 smoke.py /absolute/path/config.json
 ```
 
-测试覆盖公开/私用兼容性、持久化额度、原子预留、重启/日期切换、断流退额、合计限速、IPv6 网段、并发限制、伪造转发头、签名、跳转与 SSRF。真实 smoke 验证 GitHub Release 字节一致性、Range/HEAD，Docker Hub 清单与层的 SHA256，以及 NVIDIA 版本元数据，不安装驱动或镜像。国内速度和真实 Docker daemon 拉取仍需单独验收。
+测试覆盖后台登录、CSRF、权限隔离、设置及密码持久化、旧会话失效、模式切换、公开/私用兼容性、持久化额度、原子预留、重启/日期切换、断流退额、合计限速、IPv6 网段、并发限制、伪造转发头、签名、跳转与 SSRF。真实 smoke 验证 GitHub Release 字节一致性、Range/HEAD，Docker Hub 清单与层的 SHA256，以及 NVIDIA 版本元数据，不安装驱动或镜像。国内速度和真实 Docker daemon 拉取仍需单独验收。

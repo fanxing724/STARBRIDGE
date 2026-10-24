@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>星桥 · 管理后台</title><link rel="stylesheet" href="/admin/assets/admin.css"><script src="/admin/assets/admin.js" defer></script></head>
+<body><main>
+<header><div><a class="brand" href="/">STARBRIDGE / 星桥</a><h1>管理后台</h1><p class="muted">掌握用量，让公开下载有序运行。</p></div><button id="logout" class="secondary" hidden>退出登录</button></header>
+<p id="message" role="status" aria-live="polite"></p>
+<section id="login-section" hidden><h2>管理员登录</h2><form id="login-form"><label>用户名<input id="username" autocomplete="username" value="bridge" required></label><label>管理密码<input id="password" type="password" autocomplete="current-password" required maxlength="256"></label><button type="submit">登录后台</button></form><p class="muted">使用部署时提供的独立管理密码。公开下载不需要此账号。</p></section>
+<div id="dashboard" hidden>
+<div class="toolbar"><span id="service-state" class="badge"></span><button id="refresh" class="secondary">刷新状态与设置</button></div>
+<div class="metrics"><article><span>今日计额下载量</span><strong id="total-used">—</strong><small id="budget">—</small></article><article><span>当前传输</span><strong id="active">—</strong><small>全站最多 4 个传输</small></article><article><span>今日活跃访客</span><strong id="visitors">—</strong><small>按匿名 IP 标识统计</small></article><article><span>进程内存</span><strong id="memory">—</strong><small id="uptime">—</small></article></div>
+<section><h2>下载规则</h2><p class="muted">保存后立即生效，无需重启。暂停只阻止新下载，正在传输的文件继续完成。</p><form id="settings-form">
+<div class="switches"><label class="switch"><input type="checkbox" id="public">允许所有人下载</label><label class="switch"><input type="checkbox" id="paused">暂停新下载</label></div>
+<p class="muted">关闭公开下载后，文件下载需要原私用 bridge 账号。后台保持可登录；管理密码与私用下载密码独立。</p>
+<div class="fields"><label>每 IP 并发数<input type="number" id="ip-concurrency" min="1" max="4" required></label><label>每 IP 合计速度（MiB/s）<input type="number" id="speed" min="0.0625" max="100" step="0.0625" required></label><label>每 IP 每日额度（GiB）<input type="number" id="ip-daily" min="0.0009765625" max="10240" step="any" required></label><label>全站每日额度（GiB）<input type="number" id="daily" min="0.0009765625" max="10240" step="any" required></label><label>每 IP 每分钟请求数<input type="number" id="requests" min="5" max="600" required></label></div>
+<label>下载来源白名单<textarea id="domains" rows="7" spellcheck="false" required></textarea></label><p class="muted">每行一个裸域名；包含其子域名。不要填写 https://、路径或通配符。最多 100 个域名。</p><button type="submit">保存下载规则</button></form></section>
+<section><h2>CDN 与额度</h2><p id="proxy-status"></p><p class="muted">需要在 EdgeOne 回源规则设置受保护的 X-StarBridge-Origin-Key，才能信任 EO-Connecting-IP。公开限额模式应关闭 CDN 缓存并清理旧下载缓存，防止绕过计量。</p><p id="quota-note" class="muted"></p></section>
+<div class="columns"><section><h2>最近 7 天</h2><div class="table-wrap"><table><thead><tr><th>日期</th><th>下载用量</th></tr></thead><tbody id="history"></tbody></table></div></section><section><h2>今日用量前十</h2><div class="table-wrap"><table><thead><tr><th>匿名访客</th><th>下载用量</th></tr></thead><tbody id="clients"></tbody></table></div><p class="muted">不显示或保存明文 IP；同一公网 IP / IPv6 /64 共享限额。</p></section></div>
+<section><h2>最近管理操作</h2><p class="muted">时间为 UTC，仅记录操作类型，不记录密码、密钥或下载内容。</p><ul id="audit"></ul></section>
+<section><h2>修改管理密码</h2><form id="password-form"><div class="fields"><label>原管理密码<input type="password" id="old-password" autocomplete="current-password" required maxlength="256"></label><label>新管理密码<input type="password" id="new-password" autocomplete="new-password" required minlength="12" maxlength="256"></label><label>再次输入新密码<input type="password" id="confirm-password" autocomplete="new-password" required minlength="12" maxlength="256"></label></div><p class="muted">至少 12 个字符。修改后其他后台会话失效，当前会话会更新；不改变私用下载密码。</p><button type="submit">更新管理密码</button></form></section>
+<footer id="version"></footer>
+</div></main></body></html>

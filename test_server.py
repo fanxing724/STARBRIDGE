@@ -151,7 +151,7 @@ class HTTPTests(unittest.TestCase):
         self.assertEqual((status, data), (206, b'ell'))
         self.assertEqual(headers['Content-Range'], 'bytes 1-3/5')
         self.assertEqual(fetch.call_args[0][2]['Range'], 'bytes=1-3')
-        self.assertIn('public', headers['Cache-Control'])
+        self.assertIn('no-store', headers['Cache-Control'])
 
     def test_multi_range_rejected(self):
         path = self.app.sign('https://github.com/a.zip')

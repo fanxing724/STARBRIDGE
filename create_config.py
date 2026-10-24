@@ -18,7 +18,7 @@ config = dict(bind='127.0.0.1', port=18080, concurrency=4, link_ttl=21600,
                           ip_daily_bytes=5*1024**3, daily_bytes=30*1024**3,
                           requests_per_minute=60),
               max_file_bytes=8 * 1024**3, allowed_domains=domains,
-              password=secrets.token_urlsafe(32), secret=secrets.token_urlsafe(48))
+              password=secrets.token_urlsafe(32), admin_password=secrets.token_urlsafe(32), secret=secrets.token_urlsafe(48))
 fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
 with os.fdopen(fd, 'w') as f:
     json.dump(config, f, indent=2)
